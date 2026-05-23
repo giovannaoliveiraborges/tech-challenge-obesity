@@ -1,21 +1,93 @@
-
 import streamlit as st
 import pandas as pd
-import joblib
 import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, 'models', 'modelo_obesidade.pkl')
-DATA_PATH = os.path.join(BASE_DIR, 'data', 'Obesity.csv')
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
 
-model = joblib.load(MODEL_PATH)
-df = pd.read_csv(DATA_PATH)
 
 st.set_page_config(
     page_title='Sistema Preditivo de Obesidade',
     page_icon='🩺',
     layout='wide'
 )
+
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_PATH = os.path.join(BASE_DIR, 'data', 'Obesity.csv')
+
+
+@st.cache_data
+def load_data():
+    df = pd.read_csv(DATA_PATH)
+    return df
+
+
+@st.cache_resource
+def train_model(df):
+    df_model = df.copy()
+
+    # Criação da variável de IMC
+    df_model['BMI'] = df_model['Weight'] / (df_model['Height'] ** 2)
+
+    X = df_model.drop(columns=['Obesity'])
+    y = df_model['Obesity']
+
+    categorical_features = X.select_dtypes(include=['object']).columns.tolist()
+    numeric_features = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
+
+    numeric_transformer = Pipeline(steps=[
+        ('scaler', StandardScaler())
+    ])
+
+    categorical_transformer = Pipeline(steps=[
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features),
+            ('cat', categorical_transformer, categorical_features)
+        ]
+    )
+
+    model = RandomForestClassifier(
+        n_estimators=300,
+        random_state=42,
+        class_weight='balanced'
+    )
+
+    pipeline = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('model', model)
+    ])
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+        stratify=y
+    )
+
+    pipeline.fit(X_train, y_train)
+
+    y_pred = pipeline.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+
+    return pipeline, accuracy
+
+
+df = load_data()
+model, accuracy = train_model(df)
+
+if 'BMI' not in df.columns:
+    df['BMI'] = df['Weight'] / (df['Height'] ** 2)
+
 
 st.title('🩺 Sistema Preditivo de Nível de Obesidade')
 
@@ -25,11 +97,14 @@ Esta aplicação utiliza um modelo de Machine Learning para estimar o nível de 
 A solução tem como objetivo apoiar a equipe médica na identificação de perfis de risco e na tomada de decisão clínica.
 """)
 
+st.info(f'Acurácia do modelo no conjunto de teste: {accuracy:.2%}')
+
 tab1, tab2, tab3 = st.tabs([
     'Sistema Preditivo',
     'Dashboard Analítico',
     'Sobre o Projeto'
 ])
+
 
 with tab1:
     st.header('Previsão individual')
@@ -107,6 +182,7 @@ with tab1:
 
         st.warning('Este resultado deve ser utilizado como apoio à decisão e não substitui avaliação médica individualizada.')
 
+
 with tab2:
     st.header('Dashboard Analítico')
 
@@ -115,16 +191,16 @@ with tab2:
     st.bar_chart(obesity_counts)
 
     st.subheader('IMC médio por nível de obesidade')
-
-    if 'BMI' not in df.columns:
-        df['BMI'] = df['Weight'] / (df['Height'] ** 2)
-
     bmi_by_obesity = df.groupby('Obesity')['BMI'].mean().sort_values()
     st.bar_chart(bmi_by_obesity)
 
     st.subheader('Peso médio por nível de obesidade')
     weight_by_obesity = df.groupby('Obesity')['Weight'].mean().sort_values()
     st.bar_chart(weight_by_obesity)
+
+    st.subheader('Idade média por nível de obesidade')
+    age_by_obesity = df.groupby('Obesity')['Age'].mean().sort_values()
+    st.bar_chart(age_by_obesity)
 
     st.subheader('Histórico familiar de excesso de peso')
     family_table = pd.crosstab(df['family_history'], df['Obesity'])
@@ -134,14 +210,20 @@ with tab2:
     favc_table = pd.crosstab(df['FAVC'], df['Obesity'])
     st.dataframe(favc_table)
 
+    st.subheader('Atividade física por nível de obesidade')
+    faf_table = df.groupby('Obesity')['FAF'].mean().sort_values()
+    st.bar_chart(faf_table)
+
     st.subheader('Principais insights para a equipe médica')
 
     st.markdown("""
-    - O IMC médio aumenta de forma consistente conforme o nível de obesidade se torna mais elevado.
-    - O histórico familiar de excesso de peso pode ser usado como um sinal importante para triagem de risco.
-    - Hábitos alimentares, prática de atividade física, consumo de água e meio de transporte ajudam a compor uma visão mais ampla do perfil do paciente.
-    - O modelo preditivo pode apoiar a equipe médica em uma análise inicial, priorizando acompanhamento preventivo para perfis de maior risco.
+    - O IMC médio aumenta conforme o nível de obesidade se torna mais elevado.
+    - O histórico familiar de excesso de peso aparece como uma variável relevante para análise de risco.
+    - O consumo frequente de alimentos calóricos contribui para diferenciar perfis comportamentais.
+    - A frequência de atividade física ajuda a compor uma visão mais completa sobre o estilo de vida do paciente.
+    - O modelo preditivo pode apoiar uma triagem inicial, ajudando a equipe médica a identificar perfis que merecem maior atenção.
     """)
+
 
 with tab3:
     st.header('Sobre o Projeto')
@@ -153,10 +235,14 @@ with tab3:
 
     A solução contempla:
 
+    - análise exploratória dos dados;
+    - criação da variável de IMC;
     - pipeline de machine learning;
-    - engenharia de atributos;
-    - treinamento e avaliação de modelo;
+    - tratamento de variáveis numéricas e categóricas;
+    - treinamento de modelo Random Forest;
     - sistema preditivo em Streamlit;
     - dashboard analítico com principais insights;
     - visão de negócio voltada ao apoio à equipe médica.
+
+    O modelo foi desenvolvido para fins educacionais e deve ser interpretado como apoio à decisão, não como substituto de avaliação médica profissional.
     """)
